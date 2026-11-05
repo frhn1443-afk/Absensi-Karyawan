@@ -218,6 +218,22 @@
           </div>
         </div>
 
+        <div class="metric-card metric-gaji">
+          <div class="metric-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="4" width="20" height="16" rx="2"></rect><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
+          </div>
+          <div class="metric-info">
+            <div class="metric-header-title">
+              <span class="metric-label">Estimasi Gaji Hari Ini</span>
+              <span class="badge-tag">Gaji+OT</span>
+            </div>
+            <div class="metric-value-wrap">
+              <span class="metric-value text-green" id="stat-total-gaji">Rp 0</span>
+            </div>
+            <span class="metric-sub">Gaji Pokok + Uang Lembur</span>
+          </div>
+        </div>
+
       </div>
 
       <!-- Main Attendance Table / Cards -->
@@ -325,6 +341,11 @@
           <div class="sm-desc">Total Akumulasi Lembur</div>
         </div>
         <div class="summary-mini-card">
+          <div class="sm-label">Total Estimasi Gaji</div>
+          <div class="sm-val text-green" id="recap-sum-gaji">Rp 0</div>
+          <div class="sm-desc">Gaji Pokok + Uang Lembur</div>
+        </div>
+        <div class="summary-mini-card">
           <div class="sm-label">Total Paket Terkirim</div>
           <div class="sm-val text-blue" id="recap-sum-paket">0</div>
           <div class="sm-desc">Paket Sukses Terkirim</div>
@@ -352,6 +373,7 @@
                 <th>Masuk Siang</th>
                 <th>1/2 Hari</th>
                 <th>Lembur (Jam)</th>
+                <th>Total Gaji (Rp)</th>
                 <th>Sakit</th>
                 <th>Izin</th>
                 <th>Alpa</th>
@@ -409,6 +431,9 @@
                 <th>Jam Masuk - Keluar</th>
                 <th>Lembur (Jam Selesai)</th>
                 <th>Durasi Lembur</th>
+                <th>Gaji Pokok</th>
+                <th>Uang Lembur</th>
+                <th>Total Gaji</th>
                 <th>Keterangan</th>
               </tr>
             </thead>
@@ -480,6 +505,58 @@
               <p>Jumlah paket ekspedisi terkirim harian dihitung dan dicatat langsung oleh Admin pada kartu metrik atas (+1, +5, +10, +50, +100), bukan perorangan karyawan.</p>
             </li>
           </ul>
+        </div>
+
+        <!-- Pengaturan Tarif Gaji & Lembur (Admin) -->
+        <div class="settings-card">
+          <h3 class="settings-card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"></rect><line x1="12" y1="8" x2="12" y2="16"></line><line x1="8" y1="12" x2="16" y2="12"></line></svg>
+            Pengaturan Tarif Gaji & Uang Lembur (Admin)
+          </h3>
+          <p class="text-muted" style="margin-bottom: 14px;">Atur pilihan nominal tombol cepat gaji harian dan tarif uang lembur per jam yang muncul di samping toggle lembur.</p>
+
+          <form id="form-salary-settings">
+            <div class="salary-settings-group">
+              <label class="setting-label"><strong>Pilihan Nominal Gaji Pokok Harian (Rp):</strong></label>
+              <div class="settings-input-row">
+                <div class="input-col">
+                  <span class="sub-label">Opsi 1:</span>
+                  <input type="number" id="setting-base-1" class="form-input-sm" value="50000" step="1000" min="0">
+                </div>
+                <div class="input-col">
+                  <span class="sub-label">Opsi 2:</span>
+                  <input type="number" id="setting-base-2" class="form-input-sm" value="60000" step="1000" min="0">
+                </div>
+                <div class="input-col">
+                  <span class="sub-label">Opsi 3:</span>
+                  <input type="number" id="setting-base-3" class="form-input-sm" value="70000" step="1000" min="0">
+                </div>
+              </div>
+            </div>
+
+            <div class="salary-settings-group mt-3">
+              <label class="setting-label"><strong>Pilihan Tarif Uang Lembur per Jam (Rp):</strong></label>
+              <div class="settings-input-row">
+                <div class="input-col">
+                  <span class="sub-label">Lembur 1:</span>
+                  <input type="number" id="setting-ot-1" class="form-input-sm" value="10000" step="1000" min="0">
+                </div>
+                <div class="input-col">
+                  <span class="sub-label">Lembur 2:</span>
+                  <input type="number" id="setting-ot-2" class="form-input-sm" value="15000" step="1000" min="0">
+                </div>
+                <div class="input-col">
+                  <span class="sub-label">Lembur 3:</span>
+                  <input type="number" id="setting-ot-3" class="form-input-sm" value="20000" step="1000" min="0">
+                </div>
+              </div>
+            </div>
+
+            <button type="submit" class="btn-primary mt-3" style="width: 100%; justify-content: center;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>
+              <span>Simpan Perubahan Tarif Gaji</span>
+            </button>
+          </form>
         </div>
 
         <!-- Backup & Restore Card -->

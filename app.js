@@ -79,10 +79,19 @@ const MONTHS_ID = [
   'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
 ];
 
+// Default Salary Settings (Bisa diubah oleh Admin)
+const DEFAULT_SALARY_SETTINGS = {
+  baseOptions: [50000, 60000, 70000],
+  defaultBase: 50000,
+  otOptions: [10000, 15000, 20000],
+  defaultOtRate: 15000 // per jam
+};
+
 // App State
 class AppState {
   constructor() {
     this.employees = this.loadEmployees();
+    this.salarySettings = this.loadSalarySettings();
     this.attendanceData = this.loadAttendance();
     this.dailyPackages = this.loadDailyPackages();
     this.currentDate = this.getTodayDateString();
@@ -90,6 +99,25 @@ class AppState {
     this.recapRange = 'today';
     this.recapStartDate = this.currentDate;
     this.recapEndDate = this.currentDate;
+  }
+
+  loadSalarySettings() {
+    try {
+      const data = localStorage.getItem('quick_tracker_salary_settings');
+      if (data) {
+        const parsed = JSON.parse(data);
+        if (parsed && Array.isArray(parsed.baseOptions) && Array.isArray(parsed.otOptions)) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.error('Error loading salary settings:', e);
+    }
+    return JSON.parse(JSON.stringify(DEFAULT_SALARY_SETTINGS));
+  }
+
+  saveSalarySettings() {
+    localStorage.setItem('quick_tracker_salary_settings', JSON.stringify(this.salarySettings));
   }
 
   getTodayDateString() {
@@ -158,8 +186,11 @@ class AppState {
 
   // Get or initialize record for a specific date
   getDayRecord(dateStr) {
+    const isSun = this.isSunday(dateStr);
+    const defBase = this.salarySettings ? (this.salarySettings.defaultBase || 50000) : 50000;
+    const defOtRate = this.salarySettings ? (this.salarySettings.defaultOtRate || 15000) : 15000;
+
     if (!this.attendanceData[dateStr]) {
-      const isSun = this.isSunday(dateStr);
       const record = {};
       this.employees.forEach(emp => {
         record[emp.id] = {
@@ -168,6 +199,9 @@ class AppState {
           overtime: false,
           overtimeEnd: '18:30',
           overtimeHours: 2.0,
+          baseSalary: isSun ? 0 : defBase,
+          otRate: defOtRate,
+          customOtPay: null,
           packages: 0,
           note: ''
         };
@@ -175,21 +209,37 @@ class AppState {
       this.attendanceData[dateStr] = record;
       this.saveAttendance();
     } else {
-      // Ensure all employees exist in record
+      // Ensure all employees exist and have salary fields in record
       let updated = false;
       this.employees.forEach(emp => {
         if (!this.attendanceData[dateStr][emp.id]) {
-          const isSun = this.isSunday(dateStr);
           this.attendanceData[dateStr][emp.id] = {
             shift: isSun ? 'LIBUR' : 'NORMAL',
             absenReason: '',
             overtime: false,
             overtimeEnd: '18:30',
             overtimeHours: 2.0,
+            baseSalary: isSun ? 0 : defBase,
+            otRate: defOtRate,
+            customOtPay: null,
             packages: 0,
             note: ''
           };
           updated = true;
+        } else {
+          const rec = this.attendanceData[dateStr][emp.id];
+          if (rec.baseSalary === undefined) {
+            rec.baseSalary = (rec.shift === 'ABSEN' || rec.shift === 'LIBUR') ? 0 : defBase;
+            updated = true;
+          }
+          if (rec.otRate === undefined) {
+            rec.otRate = defOtRate;
+            updated = true;
+          }
+          if (rec.customOtPay === undefined) {
+            rec.customOtPay = null;
+            updated = true;
+          }
         }
       });
       if (updated) this.saveAttendance();
@@ -252,6 +302,48 @@ function calculateOvertimeDuration(endTimeStr) {
 }
 
 /**
+ * Format nominal rupiah singkat (e.g. 50000 -> "50rb")
+ */
+function formatK(num) {
+  const val = parseInt(num) || 0;
+  if (val >= 1000) {
+    const k = val / 1000;
+    return `${k % 1 === 0 ? k : k.toFixed(1)}rb`;
+  }
+  return String(val);
+}
+
+/**
+ * Hitung rincian gaji harian per karyawan
+ * Base Salary (50k, 60k, 70k) + Uang Lembur (Jam x Tarif Lembur 10k-20k atau custom)
+ */
+function calculateEmployeeSalary(empData) {
+  if (!empData) return { base: 0, ot: 0, total: 0 };
+  const shift = empData.shift || 'NORMAL';
+  if (shift === 'ABSEN' || shift === 'LIBUR') {
+    return { base: 0, ot: 0, total: 0 };
+  }
+
+  const base = parseInt(empData.baseSalary) || 0;
+  let ot = 0;
+  if (empData.overtime) {
+    if (empData.customOtPay !== null && empData.customOtPay !== undefined && empData.customOtPay !== '') {
+      ot = parseInt(empData.customOtPay) || 0;
+    } else {
+      const rate = parseInt(empData.otRate) || 15000;
+      const hours = parseFloat(empData.overtimeHours) || 0;
+      ot = Math.round(hours * rate);
+    }
+  }
+
+  return {
+    base: base,
+    ot: ot,
+    total: base + ot
+  };
+}
+
+/**
  * Add or subtract days from a YYYY-MM-DD date string
  */
 function offsetDateString(dateStr, offsetDays) {
@@ -273,9 +365,9 @@ function showToast(message, type = 'info') {
   toast.className = `toast toast-${type}`;
   toast.innerHTML = `
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      ${type === 'success' 
-        ? '<polyline points="20 6 9 17 4 12"></polyline>' 
-        : '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>'}
+      ${type === 'success'
+      ? '<polyline points="20 6 9 17 4 12"></polyline>'
+      : '<circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line>'}
     </svg>
     <span>${message}</span>
   `;
@@ -440,6 +532,88 @@ function renderDailyAttendance() {
       </button>
     `).join('');
 
+    // Kalkulasi Sistem Gaji per Karyawan
+    const sal = calculateEmployeeSalary(data);
+    const salarySettings = state.salarySettings || DEFAULT_SALARY_SETTINGS;
+    const baseOpts = salarySettings.baseOptions || [50000, 60000, 70000];
+    const otOpts = salarySettings.otOptions || [10000, 15000, 20000];
+    const curBase = parseInt(data.baseSalary) || 0;
+    const curOtRate = parseInt(data.otRate) || 15000;
+
+    let salaryCellHtml = '';
+    if (isAbsen || isLibur) {
+      salaryCellHtml = `
+        <div class="salary-box salary-box-inactive">
+          <div class="salary-inactive-info">
+            <span class="salary-off-badge">${isLibur ? '🏖️ Libur Minggu' : '❌ Tidak Masuk'}</span>
+            <span class="salary-off-amount">Gaji: Rp 0</span>
+          </div>
+        </div>
+      `;
+    } else {
+      // Tombol pilihan gaji pokok harian (50rb, 60rb, 70rb)
+      const baseButtonsHtml = baseOpts.map(amt => `
+        <button type="button" class="salary-pill-btn ${curBase === amt ? 'active' : ''}"
+          onclick="setEmployeeBaseSalary('${emp.id}', ${amt})"
+          title="Pilih Gaji Pokok Rp ${amt.toLocaleString('id-ID')}">
+          ${formatK(amt)}
+        </button>
+      `).join('');
+
+      // Tombol pilihan tarif lembur (10rb, 15rb, 20rb)
+      let otButtonsHtml = '';
+      if (isLembur) {
+        otButtonsHtml = otOpts.map(rate => `
+          <button type="button" class="salary-pill-btn salary-ot-pill ${curOtRate === rate && !data.customOtPay ? 'active' : ''}"
+            onclick="setEmployeeOtRate('${emp.id}', ${rate})"
+            title="Tarif Uang Lembur Rp ${rate.toLocaleString('id-ID')}/jam">
+            ${formatK(rate)}/j
+          </button>
+        `).join('');
+      }
+
+      salaryCellHtml = `
+        <div class="salary-box">
+          <!-- Pilihan Gaji Pokok -->
+          <div class="salary-row">
+            <span class="salary-row-label">Gaji:</span>
+            <div class="salary-pills-group">
+              ${baseButtonsHtml}
+              <button type="button" class="salary-pill-btn btn-custom-pill"
+                onclick="promptCustomBaseSalary('${emp.id}')" title="Ubah nominal gaji kustom">
+                ✏️
+              </button>
+            </div>
+          </div>
+
+          <!-- Pilihan Uang Lembur (jika lembur aktif) -->
+          ${isLembur ? `
+            <div class="salary-row salary-ot-row">
+              <span class="salary-row-label">Lembur:</span>
+              <div class="salary-pills-group">
+                ${otButtonsHtml}
+                <button type="button" class="salary-pill-btn btn-custom-pill"
+                  onclick="promptCustomOtRate('${emp.id}')" title="Ubah tarif lembur kustom / total uang lembur">
+                  ✏️
+                </button>
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- Total Gaji Hari Ini -->
+          <div class="salary-total-row">
+            <span class="salary-total-label">Total:</span>
+            <div class="salary-total-wrap">
+              <strong class="salary-total-badge">
+                Rp ${sal.total.toLocaleString('id-ID')}
+              </strong>
+              ${isLembur ? `<span class="salary-calc-hint">(${formatK(sal.base)} + ${formatK(sal.ot)})</span>` : ''}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
     html += `
       <div class="emp-row" id="row-${emp.id}">
         <!-- Col 1: Identity -->
@@ -483,6 +657,10 @@ function renderDailyAttendance() {
           ` : ''}
         </div>
 
+        <!-- Col 4: Sistem Gajian (di sebelah toggle lembur) -->
+        <div class="salary-cell">
+          ${salaryCellHtml}
+        </div>
 
       </div>
     `;
@@ -521,6 +699,7 @@ function updateQuickMetrics() {
   let totalOtHours = 0;
   let otPersonCount = 0;
   let absenCount = 0;
+  let totalSalaryToday = 0;
 
   activeEmployees.forEach(emp => {
     const data = dayRecord[emp.id];
@@ -537,6 +716,9 @@ function updateQuickMetrics() {
       totalOtHours += otHours;
       if (otHours > 0) otPersonCount++;
     }
+
+    const sal = calculateEmployeeSalary(data);
+    totalSalaryToday += sal.total;
   });
 
   document.getElementById('stat-total-hadir').textContent = hadirCount;
@@ -546,6 +728,11 @@ function updateQuickMetrics() {
   document.getElementById('stat-count-lembur').textContent = `Jam (${otPersonCount} orang)`;
 
   document.getElementById('stat-total-absen').textContent = absenCount;
+
+  const statGajiEl = document.getElementById('stat-total-gaji');
+  if (statGajiEl) {
+    statGajiEl.textContent = `Rp ${totalSalaryToday.toLocaleString('id-ID')}`;
+  }
 
   // Update kartu paket admin
   updateAdminPaketDisplay();
@@ -559,7 +746,7 @@ function updateQuickMetrics() {
    User Interaction Actions
    ========================================================================== */
 
-window.setEmployeeShift = function(empId, shiftKey) {
+window.setEmployeeShift = function (empId, shiftKey) {
   const dayRecord = state.getDayRecord(state.currentDate);
   if (!dayRecord[empId]) return;
 
@@ -568,16 +755,23 @@ window.setEmployeeShift = function(empId, shiftKey) {
     dayRecord[empId].absenReason = 'Izin';
   }
 
-  // If set to absen, automatically disable overtime
+  // Atur gaji & lembur saat absen / libur
   if (shiftKey === 'ABSEN' || shiftKey === 'LIBUR') {
     dayRecord[empId].overtime = false;
+    dayRecord[empId].baseSalary = 0;
+  } else {
+    // Jika kembali hadir, pastikan gaji pokok terisi default bila sebelumnya 0
+    if (!dayRecord[empId].baseSalary || dayRecord[empId].baseSalary === 0) {
+      const defBase = state.salarySettings ? (state.salarySettings.defaultBase || 50000) : 50000;
+      dayRecord[empId].baseSalary = defBase;
+    }
   }
 
   state.saveAttendance();
   renderDailyAttendance();
 };
 
-window.setAbsenReason = function(empId, reason) {
+window.setAbsenReason = function (empId, reason) {
   const dayRecord = state.getDayRecord(state.currentDate);
   if (!dayRecord[empId]) return;
   dayRecord[empId].absenReason = reason;
@@ -585,7 +779,7 @@ window.setAbsenReason = function(empId, reason) {
   renderDailyAttendance();
 };
 
-window.toggleEmployeeOvertime = function(empId, isChecked) {
+window.toggleEmployeeOvertime = function (empId, isChecked) {
   const dayRecord = state.getDayRecord(state.currentDate);
   if (!dayRecord[empId]) return;
 
@@ -599,6 +793,8 @@ window.toggleEmployeeOvertime = function(empId, isChecked) {
     // If employee was Absen, flip them to Normal since they're working overtime
     if (dayRecord[empId].shift === 'ABSEN' || dayRecord[empId].shift === 'LIBUR') {
       dayRecord[empId].shift = 'NORMAL';
+      const defBase = state.salarySettings ? (state.salarySettings.defaultBase || 50000) : 50000;
+      dayRecord[empId].baseSalary = defBase;
     }
   }
 
@@ -606,7 +802,7 @@ window.toggleEmployeeOvertime = function(empId, isChecked) {
   renderDailyAttendance();
 };
 
-window.setEmployeeOvertimeTime = function(empId, timeStr) {
+window.setEmployeeOvertimeTime = function (empId, timeStr) {
   const dayRecord = state.getDayRecord(state.currentDate);
   if (!dayRecord[empId]) return;
 
@@ -618,7 +814,71 @@ window.setEmployeeOvertimeTime = function(empId, timeStr) {
   renderDailyAttendance();
 };
 
-window.adjustPackage = function(empId, delta) {
+/**
+ * Pengaturan Gaji Karyawan Harian & Tarif Lembur
+ */
+window.setEmployeeBaseSalary = function (empId, amount) {
+  const dayRecord = state.getDayRecord(state.currentDate);
+  if (!dayRecord[empId]) return;
+
+  dayRecord[empId].baseSalary = parseInt(amount) || 0;
+  state.saveAttendance();
+  renderDailyAttendance();
+};
+
+window.setEmployeeOtRate = function (empId, rate) {
+  const dayRecord = state.getDayRecord(state.currentDate);
+  if (!dayRecord[empId]) return;
+
+  dayRecord[empId].otRate = parseInt(rate) || 15000;
+  dayRecord[empId].customOtPay = null; // reset custom
+  state.saveAttendance();
+  renderDailyAttendance();
+};
+
+window.promptCustomBaseSalary = function (empId) {
+  const dayRecord = state.getDayRecord(state.currentDate);
+  if (!dayRecord[empId]) return;
+
+  const cur = dayRecord[empId].baseSalary || 50000;
+  const input = prompt('Masukkan nominal Gaji Pokok untuk hari ini (contoh: 50000, 65000, 75000):', cur);
+  if (input !== null) {
+    const clean = parseInt(input.replace(/[^0-9]/g, ''));
+    if (!isNaN(clean) && clean >= 0) {
+      dayRecord[empId].baseSalary = clean;
+      state.saveAttendance();
+      renderDailyAttendance();
+      showToast(`Gaji pokok diubah menjadi Rp ${clean.toLocaleString('id-ID')}`, 'success');
+    }
+  }
+};
+
+window.promptCustomOtRate = function (empId) {
+  const dayRecord = state.getDayRecord(state.currentDate);
+  if (!dayRecord[empId]) return;
+
+  const curRate = dayRecord[empId].otRate || 15000;
+  const input = prompt('Pilih:\nKetik tarif per jam (misal: 12000, 15000, 20000)\nAtau ketik langsung total uang lembur (misal: 25000):', curRate);
+  if (input !== null) {
+    const clean = parseInt(input.replace(/[^0-9]/g, ''));
+    if (!isNaN(clean) && clean >= 0) {
+      if (clean <= 50000) {
+        // Anggap tarif per jam
+        dayRecord[empId].otRate = clean;
+        dayRecord[empId].customOtPay = null;
+        showToast(`Tarif lembur diatur ke Rp ${clean.toLocaleString('id-ID')}/jam`, 'success');
+      } else {
+        // Anggap flat total uang lembur
+        dayRecord[empId].customOtPay = clean;
+        showToast(`Total uang lembur diatur flat ke Rp ${clean.toLocaleString('id-ID')}`, 'success');
+      }
+      state.saveAttendance();
+      renderDailyAttendance();
+    }
+  }
+};
+
+window.adjustPackage = function (empId, delta) {
   const dayRecord = state.getDayRecord(state.currentDate);
   if (!dayRecord[empId]) return;
 
@@ -633,7 +893,7 @@ window.adjustPackage = function(empId, delta) {
   renderDailyAttendance();
 };
 
-window.setPackageCount = function(empId, val) {
+window.setPackageCount = function (empId, val) {
   const dayRecord = state.getDayRecord(state.currentDate);
   if (!dayRecord[empId]) return;
 
@@ -649,7 +909,7 @@ window.setPackageCount = function(empId, val) {
  * Admin Daily Package Controls
  * Fungsi ini dipanggil dari kartu "Paket Terkirim Hari Ini" di tab Absensi
  */
-window.adjustDailyPackage = function(delta) {
+window.adjustDailyPackage = function (delta) {
   const current = state.getDailyPackageCount(state.currentDate);
   const updated = Math.max(0, current + delta);
   state.setDailyPackageCount(state.currentDate, updated);
@@ -659,7 +919,7 @@ window.adjustDailyPackage = function(delta) {
   updateAdminPaketDisplay();
 };
 
-window.setDailyPackageCount = function(val) {
+window.setDailyPackageCount = function (val) {
   const count = Math.max(0, parseInt(val) || 0);
   state.setDailyPackageCount(state.currentDate, count);
 
@@ -823,7 +1083,7 @@ function calculateRecapPeriodDates() {
 
     state.recapStartDate = formatYMD(monday);
     state.recapEndDate = formatYMD(saturday);
-    document.getElementById('recap-period-label').textContent = 
+    document.getElementById('recap-period-label').textContent =
       `Menampilkan Rekap: Minggu Ini (Senin ${formatYMD(monday)} s/d Sabtu ${formatYMD(saturday)})`;
   } else if (state.recapRange === 'this-month') {
     const y = d.getFullYear();
@@ -840,10 +1100,10 @@ function calculateRecapPeriodDates() {
 
     state.recapStartDate = formatYMD(firstDay);
     state.recapEndDate = formatYMD(lastDay);
-    document.getElementById('recap-period-label').textContent = 
+    document.getElementById('recap-period-label').textContent =
       `Menampilkan Rekap: Bulan Ini (${MONTHS_ID[m]} ${y})`;
   } else if (state.recapRange === 'custom') {
-    document.getElementById('recap-period-label').textContent = 
+    document.getElementById('recap-period-label').textContent =
       `Menampilkan Rekap: ${state.recapStartDate} s/d ${state.recapEndDate}`;
   }
 }
@@ -867,7 +1127,10 @@ function renderRecap() {
       sakit: 0,
       izin: 0,
       alpa: 0,
-      totalHadir: 0
+      totalHadir: 0,
+      totalBaseSalary: 0,
+      totalOtSalary: 0,
+      totalSalary: 0
     };
   });
 
@@ -893,9 +1156,13 @@ function renderRecap() {
       const isLembur = !!row.overtime;
       const otHours = isLembur ? calculateOvertimeDuration(row.overtimeEnd) : 0;
       const pkg = parseInt(row.packages) || 0;
+      const sal = calculateEmployeeSalary(row);
 
       st.packages += pkg;
       st.lemburHours += otHours;
+      st.totalBaseSalary += sal.base;
+      st.totalOtSalary += sal.ot;
+      st.totalSalary += sal.total;
 
       let shiftLabel = '-';
       let hoursRange = '-';
@@ -940,6 +1207,9 @@ function renderRecap() {
         hoursRange: hoursRange,
         overtimeEnd: isLembur ? row.overtimeEnd : '-',
         otHours: otHours,
+        baseSalary: sal.base,
+        otSalary: sal.ot,
+        totalSalary: sal.total,
         packages: pkg,
         note: row.absenReason || '-'
       });
@@ -950,6 +1220,7 @@ function renderRecap() {
   let grandTotalHadir = 0;
   let grandTotalLembur = 0;
   let grandTotalPaket = 0;
+  let grandTotalGaji = 0;
   let topPerformer = '-';
   let topPerformerCount = 0;
 
@@ -960,6 +1231,7 @@ function renderRecap() {
     grandTotalHadir += st.totalHadir;
     grandTotalLembur += st.lemburHours;
     grandTotalPaket += st.packages;
+    grandTotalGaji += st.totalSalary;
 
     if (st.packages > topPerformerCount) {
       topPerformerCount = st.packages;
@@ -975,7 +1247,7 @@ function renderRecap() {
         <td><span class="legend-dot dot-siang"></span> ${st.siang}</td>
         <td><span class="legend-dot dot-half"></span> ${st.half}</td>
         <td><strong class="text-purple">${st.lemburHours.toFixed(1).replace('.0', '')} Jam</strong></td>
-        <td><strong class="text-blue">${st.packages.toLocaleString('id-ID')}</strong></td>
+        <td><strong class="text-green">Rp ${st.totalSalary.toLocaleString('id-ID')}</strong></td>
         <td>${st.sakit}</td>
         <td>${st.izin}</td>
         <td>${st.alpa}</td>
@@ -991,7 +1263,7 @@ function renderRecap() {
       <td colspan="2">TOTAL KESELURUHAN</td>
       <td colspan="4"><strong>${grandTotalHadir} Kehadiran</strong></td>
       <td><strong class="text-purple">${grandTotalLembur.toFixed(1).replace('.0', '')} Jam</strong></td>
-      <td><strong class="text-blue">${grandTotalPaket.toLocaleString('id-ID')} Paket</strong></td>
+      <td><strong class="text-green">Rp ${grandTotalGaji.toLocaleString('id-ID')}</strong></td>
       <td colspan="3"></td>
     </tr>
   `;
@@ -1058,13 +1330,16 @@ function renderRecap() {
         <td>${log.hoursRange}</td>
         <td>${log.overtimeEnd}</td>
         <td>${log.otHours > 0 ? `<strong>+${log.otHours} Jam</strong>` : '-'}</td>
+        <td>Rp ${log.baseSalary.toLocaleString('id-ID')}</td>
+        <td>Rp ${log.otSalary.toLocaleString('id-ID')}</td>
+        <td><strong class="text-green">Rp ${log.totalSalary.toLocaleString('id-ID')}</strong></td>
         <td>${log.note}</td>
       </tr>
     `;
   });
 
   if (logEntries.length === 0) {
-    logHtml = `<tr><td colspan="8" style="text-align: center; color: var(--text-muted); padding: 24px;">Belum ada catatan presensi pada rentang tanggal ini.</td></tr>`;
+    logHtml = `<tr><td colspan="11" style="text-align: center; color: var(--text-muted); padding: 24px;">Belum ada catatan presensi pada rentang tanggal ini.</td></tr>`;
   }
   document.getElementById('tbody-recap-logs').innerHTML = logHtml;
 }
@@ -1076,7 +1351,7 @@ function exportRecapToCSV() {
   const dateList = getDatesInRange(state.recapStartDate, state.recapEndDate);
   const activeEmployees = state.employees.filter(e => e.active !== false);
 
-  let csv = 'Tanggal,Hari,Nama Karyawan,Shift,Jam Masuk-Keluar,Status Lembur,Jam Pulang Lembur,Durasi Lembur (Jam),Jumlah Paket Terkirim,Keterangan\n';
+  let csv = 'Tanggal,Hari,Nama Karyawan,Shift,Jam Masuk-Keluar,Status Lembur,Jam Pulang Lembur,Durasi Lembur (Jam),Gaji Pokok (Rp),Uang Lembur (Rp),Total Gaji (Rp),Keterangan\n';
 
   dateList.forEach(dateStr => {
     const dayData = state.attendanceData[dateStr];
@@ -1093,6 +1368,7 @@ function exportRecapToCSV() {
       const isLembur = !!row.overtime;
       const otHours = isLembur ? calculateOvertimeDuration(row.overtimeEnd) : 0;
       const shift = row.shift || 'NORMAL';
+      const sal = calculateEmployeeSalary(row);
       let hoursRange = '-';
 
       if (shift === 'NORMAL') hoursRange = '08.30 - 16.30';
@@ -1111,7 +1387,9 @@ function exportRecapToCSV() {
         `"${isLembur ? 'Ya' : 'Tidak'}"`,
         `"${isLembur ? row.overtimeEnd : '-'}"`,
         `"${otHours}"`,
-        `"${row.packages || 0}"`,
+        `"${sal.base}"`,
+        `"${sal.ot}"`,
+        `"${sal.total}"`,
         `"${(row.absenReason || row.note || '-').replace(/"/g, '""')}"`
       ];
       csv += line.join(',') + '\n';
@@ -1122,7 +1400,7 @@ function exportRecapToCSV() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `Rekap_Absensi_Paket_${state.recapStartDate}_sd_${state.recapEndDate}.csv`;
+  a.download = `Rekap_Presensi_Gaji_${state.recapStartDate}_sd_${state.recapEndDate}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1164,7 +1442,7 @@ function renderEmployeeManagement() {
   container.innerHTML = html;
 }
 
-window.openEditEmployeeModal = function(empId) {
+window.openEditEmployeeModal = function (empId) {
   const emp = state.employees.find(e => e.id === empId);
   if (!emp) return;
 
@@ -1175,7 +1453,7 @@ window.openEditEmployeeModal = function(empId) {
   document.getElementById('input-employee-name').focus();
 };
 
-window.confirmDeleteEmployee = function(empId) {
+window.confirmDeleteEmployee = function (empId) {
   const emp = state.employees.find(e => e.id === empId);
   if (!emp) return;
 
@@ -1236,7 +1514,7 @@ function restoreJsonData(event) {
   if (!file) return;
 
   const reader = new FileReader();
-  reader.onload = function(e) {
+  reader.onload = function (e) {
     try {
       const data = JSON.parse(e.target.result);
       if (data.employees && Array.isArray(data.employees)) {
@@ -1463,7 +1741,58 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('file-restore-json').addEventListener('change', restoreJsonData);
   document.getElementById('btn-reset-demo').addEventListener('click', resetToDefaultEmployees);
 
+  // Form Pengaturan Tarif Gaji & Lembur (Admin)
+  initSalarySettingsForm();
+
   // Initial render
   renderDailyAttendance();
   renderEmployeeManagement();
 });
+
+/**
+ * Inisialisasi dan simpan pengaturan nominal gaji oleh admin
+ */
+function initSalarySettingsForm() {
+  const form = document.getElementById('form-salary-settings');
+  if (!form) return;
+
+  const cfg = state.salarySettings || DEFAULT_SALARY_SETTINGS;
+  const bOpts = cfg.baseOptions || [50000, 60000, 70000];
+  const oOpts = cfg.otOptions || [10000, 15000, 20000];
+
+  const s1 = document.getElementById('setting-base-1');
+  const s2 = document.getElementById('setting-base-2');
+  const s3 = document.getElementById('setting-base-3');
+  const ot1 = document.getElementById('setting-ot-1');
+  const ot2 = document.getElementById('setting-ot-2');
+  const ot3 = document.getElementById('setting-ot-3');
+
+  if (s1) s1.value = bOpts[0] || 50000;
+  if (s2) s2.value = bOpts[1] || 60000;
+  if (s3) s3.value = bOpts[2] || 70000;
+  if (ot1) ot1.value = oOpts[0] || 10000;
+  if (ot2) ot2.value = oOpts[1] || 15000;
+  if (ot3) ot3.value = oOpts[2] || 20000;
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const valS1 = parseInt(s1.value) || 50000;
+    const valS2 = parseInt(s2.value) || 60000;
+    const valS3 = parseInt(s3.value) || 70000;
+
+    const valOt1 = parseInt(ot1.value) || 10000;
+    const valOt2 = parseInt(ot2.value) || 15000;
+    const valOt3 = parseInt(ot3.value) || 20000;
+
+    state.salarySettings = {
+      baseOptions: [valS1, valS2, valS3],
+      defaultBase: valS1,
+      otOptions: [valOt1, valOt2, valOt3],
+      defaultOtRate: valOt2
+    };
+
+    state.saveSalarySettings();
+    renderDailyAttendance();
+    showToast('Tarif gaji pokok & lembur berhasil diperbarui!', 'success');
+  });
+}
